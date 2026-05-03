@@ -1,0 +1,20 @@
+{
+  "name": "nagarik-ai",
+  "private": true,
+  "version": "2.0.0",
+  "description": "Nagarik AI — Civic election assistant for every Indian citizen. Fully offline, state-driven guided flows.",
+  "type": "module",
+  "scripts": {
+    "dev":     "vite",
+    "build":   "vite build",
+    "preview": "vite preview --port 8080"
+  },
+  "dependencies": {
+    "react":     "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "vite":                 "^5.4.8"
+  }
+}

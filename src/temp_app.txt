@@ -1,0 +1,1187 @@
+/**
+ * Nagarik AI — App.jsx
+ * Upgraded: Real AI chat · Hindi toggle · Share score · Transitions · Facts
+ */
+
+import { useState, useRef, useEffect, useCallback } from "react";
+import "./App.css";
+import { TIMELINE, VOTE_STEPS } from "./data/electionData";
+import { checkEligibility } from "./utils/eligibilityLogic";
+
+// ─── Election Facts (Upgrade 5) ───────────────────────────────────────────────
+const FACTS = [
+  "🗳️ India has 1 polling booth per 1,500 voters — none more than 2 km from any home.",
+  "🖊️ Indelible ink has been used in Indian elections since 1962. Made in Mysore.",
+  "📱 You can download your e-EPIC Voter ID free on the ECI Voter Helpline App.",
+  "⏱️ The average Indian spends under 3 minutes inside a polling booth.",
+  "🔒 EVMs have never been successfully hacked in any Indian election.",
+  "🌍 India's election uses more EVMs than any country on Earth.",
+];
+
+// ─── Hindi / English UI strings (Upgrade 2) ──────────────────────────────────
+const STR = {
+  en: {
+    namaste: "Namaste",
+    guideVote: "Guide Me to Vote", guideDesc: "6 steps · registration to ballot",
+    journey: "Election Journey",   journeyDesc: "7 phases · announcement to results",
+    eligible: "Am I Eligible?",    eligDesc: "5 questions · takes 1 minute",
+    readiness: "Readiness Check",  readinessDesc: "Score out of 10 · know your gaps",
+    placeholder: "Or ask anything about elections…",
+    hint: 'Try asking: "What is EPIC?" or "How do I register?"',
+    clearer: "Clearer than Google. Faster than asking around.",
+    toggle: "हिं",
+  },
+  hi: {
+    namaste: "नमस्ते",
+    guideVote: "मतदान गाइड",        guideDesc: "6 चरण · पंजीकरण से मतदान",
+    journey: "चुनाव यात्रा",        journeyDesc: "7 चरण · घोषणा से परिणाम",
+    eligible: "क्या मैं योग्य हूं?", eligDesc: "5 प्रश्न · 1 मिनट में",
+    readiness: "तैयारी जांच",       readinessDesc: "10 में से स्कोर",
+    placeholder: "चुनाव के बारे में कुछ भी पूछें…",
+    hint: "पूछें: \"EVM क्या है?\" या \"पंजीकरण कैसे करें?\"",
+    clearer: "Google से स्पष्ट। पूछने से तेज़।",
+    toggle: "EN",
+  },
+};
+
+// ─── Backend API call (Upgrade 1 — secure proxy) ─────────────────────────────
+// API key lives in backend/.env — never in the browser bundle.
+async function callClaude(text, isHindi) {
+  const base = import.meta.env.VITE_API_URL || "http://localhost:3001";
+  const res = await fetch(`${base}/api/chat`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message: text, isHindi }),
+  });
+  if (!res.ok) throw new Error(`Backend error ${res.status}`);
+  const data = await res.json();
+  if (!data.reply) throw new Error("No reply from backend");
+  return data.reply;
+}
+
+// ─── Smart offline knowledge base — fuzzy + natural phrasing ────────────────
+const OFFLINE_RESPONSES = [
+  {
+    pattern: /evm|electronic.?voting.?machine|voting machine|how.*evm|evm.*work|what.*evm|evm.*mean/i,
+    reply: "EVM (Electronic Voting Machine) is a tamper-proof device. Press the blue button next to your candidate — the vote records instantly. Every EVM has a VVPAT for paper verification.",
+    actions: ["How do I vote?", "What is VVPAT?"],
+  },
+  {
+    pattern: /vvpat|paper.?trail|paper.?slip|voter.?verifiable/i,
+    reply: "VVPAT prints a paper slip showing your candidate for 7 seconds after you vote — then it drops into a sealed box. Attached to every EVM across India.",
+    actions: ["Guide me to vote", "What is EVM?"],
+  },
+  {
+    pattern: /\bepic\b|voter.?id|voter card|id card|elector.*photo|photo.*id/i,
+    reply: "EPIC (Elector Photo Identity Card) is your official Voter ID. Get a free digital e-EPIC on the ECI Voter Helpline App — no office visit needed.",
+    actions: ["How do I vote?", "Find my polling booth"],
+  },
+  {
+    pattern: /voter.*roll|electoral.*roll|voter.*list|check.*name|name.*list|am i.*registered/i,
+    reply: "Check if your name is on the electoral roll at electoralsearch.eci.gov.in — search by name, EPIC number, or mobile number. It takes 30 seconds.",
+    actions: ["Check my eligibility", "Guide me to vote"],
+  },
+  {
+    pattern: /register|enrollment|new voter|form.?6|sign.?up|apply.*vote|how to.*vote.*first/i,
+    reply: "Register as a new voter at voters.eci.gov.in → fill Form 6 online → upload age proof, address proof, and a photo. Takes 4–6 weeks to process.",
+    actions: ["Guide me to vote", "Check my eligibility"],
+  },
+  {
+    pattern: /booth|polling station|polling centre|where.*vote|vote.*where|my booth|find.*booth/i,
+    reply: "Find your assigned booth at electoralsearch.eci.gov.in — search by name or EPIC number. Booths are always within 2 km of your registered address.",
+    actions: ["Guide me to vote", "Check my eligibility"],
+  },
+  {
+    pattern: /time|hours|open|close|timing|when.*poll|poll.*when|booth.*time|voting.*time/i,
+    reply: "Polling booths are open 7:00 AM – 6:00 PM on election day. Hours can vary slightly by state — verify your exact booth timing via the ECI app.",
+    actions: ["Find my polling booth", "Guide me to vote"],
+  },
+  {
+    pattern: /eligib|qualify|can i vote|who can vote|age.*vote|vote.*age|18|minimum age|citizen.*vote/i,
+    reply: "You're eligible to vote if you're 18+ years old, an Indian citizen, and ordinarily resident at a registered address. Registration is free at voters.eci.gov.in.",
+    actions: ["Check my eligibility", "Guide me to vote"],
+  },
+  {
+    pattern: /indelible.?ink|\bink\b|finger.*mark|mark.*finger|ink.*finger/i,
+    reply: "Indelible silver-nitrate ink is applied to your left index finger to prevent double voting — stays ~2 weeks. Used in India since 1962, made in Mysore.",
+    actions: ["Guide me to vote", "Show election timeline"],
+  },
+  {
+    pattern: /mcc|model.?code|code.?of.?conduct/i,
+    reply: "The Model Code of Conduct kicks in when the election schedule is announced — banning new govt schemes and political misuse of official resources until results.",
+    actions: ["Show election timeline", "Guide me to vote"],
+  },
+  {
+    pattern: /silent.?period|48.?hour|campaign.*ban|no.*campaign/i,
+    reply: "A 48-hour silent period before polling day bans all campaigns, rallies, and political ads — giving voters space to decide freely.",
+    actions: ["Show election timeline", "Guide me to vote"],
+  },
+  {
+    pattern: /helpline|1950|toll.?free|complaint|report.*violation/i,
+    reply: "ECI Voter Helpline: 1950 (toll-free, every day). Report violations with geo-tagged photos via the cVIGIL app — anonymously.",
+    actions: ["Am I eligible?", "Guide me to vote"],
+  },
+  {
+    pattern: /document|id.*bring|carry.*id|what.*bring|bring.*poll/i,
+    reply: "Bring any one of these to vote: Voter ID (EPIC), Aadhaar, PAN card, Passport, Driving Licence, or MNREGA job card. Your name must be on the electoral roll.",
+    actions: ["Guide me to vote", "Find my polling booth"],
+  },
+  {
+    pattern: /proxy|someone.*vote|vote.*behalf|vote.*me/i,
+    reply: "No proxy voting is allowed in India — only you can cast your own vote in person. NRI voters can vote in person at their constituency.",
+    actions: ["Guide me to vote", "Check my eligibility"],
+  },
+];
+
+function getOfflineResponse(text) {
+  for (const { pattern, reply, actions } of OFFLINE_RESPONSES) {
+    if (pattern.test(text)) return { reply, actions };
+  }
+  return {
+    reply: FALLBACKS[Math.floor(Math.random() * FALLBACKS.length)],
+    actions: ["Guide me to vote", "Check my eligibility", "Show election timeline"],
+  };
+}
+
+
+// ─── India Flag SVG (replaces emoji which doesn't render on Windows) ─────────
+function IndiaFlag({ size = 22 }) {
+  return (
+    <svg
+      width={size}
+      height={Math.round(size * 0.667)}
+      viewBox="0 0 900 600"
+      style={{ borderRadius: 2, flexShrink: 0, display: "block" }}
+    >
+      <rect width="900" height="200" fill="#FF9933" />
+      <rect y="200" width="900" height="200" fill="#FFFFFF" />
+      <rect y="400" width="900" height="200" fill="#138808" />
+      <circle cx="450" cy="300" r="60" fill="none" stroke="#000080" strokeWidth="7" />
+      <circle cx="450" cy="300" r="9" fill="#000080" />
+      {Array.from({ length: 24 }, (_, i) => {
+        const a = (i / 24) * Math.PI * 2;
+        return (
+          <line key={i} x1="450" y1="300"
+            x2={450 + 52 * Math.cos(a)}
+            y2={300 + 52 * Math.sin(a)}
+            stroke="#000080" strokeWidth="2.5"
+          />
+        );
+      })}
+    </svg>
+  );
+}
+
+// ─── Intent patterns — fuzzy + natural phrasing support ──────────────────
+const INTENT_PATTERNS = [
+  // voting — catches "how do I vote", "guide me", "steps to vote", "booth", etc.
+  { flow: "voting",
+    re: /\bvot(e|ing|er)\b|ballot|cast.*vote|how.*vote|steps.*vote|guide.*vote|booth|evm|vvpat|indelible|register.*voter|voter.*register|what.*bring.*poll|document.*poll/i },
+  // timeline — catches "when is election", "phases", "counting", "results"
+  { flow: "timeline",
+    re: /timeline|schedule|phase|when.*elect|elect.*when|announce|campaign|\bmcc\b|counting|result|election date|poll date/i },
+  // eligibility — catches "can I vote", "am I eligible", "age to vote", "who can vote"
+  { flow: "eligibility",
+    re: /eligib|can i vote|who can vote|qualify|citizenship|age.*vote|vote.*age|am i.*register|18.*vote|nri.*vote|check.*elig/i },
+  // quiz — catches "test me", "am I ready", "readiness", "score"
+  { flow: "quiz",
+    re: /quiz|ready|readiness|\bscore\b|\btest\b|prepared|assess|how ready|am i ready/i },
+];
+
+const FALLBACKS = [
+  "I can help you with voting steps, eligibility, election timeline, or a readiness check — pick a topic or ask away!",
+  "Good question! Try asking: 'What is EVM?', 'How do I register?', or 'Am I eligible?' — I'll answer instantly.",
+  "I'm your Indian elections guide. Ask about voter ID, polling booths, eligibility, voting steps, or the election timeline.",
+];
+
+// ─── Quick Answers — instant factual responses (⚡ badge) ─────────────────
+const QUICK_ANSWERS = [
+  { q: /evm|electronic.?voting.?machine|how.*evm|evm.*work|what.*evm|evm.*mean/i,
+    a: "EVM (Electronic Voting Machine) is a tamper-proof device — press the blue button next to your candidate to cast your vote. Each EVM is paired with a VVPAT that prints a paper slip for verification." },
+  { q: /vvpat|paper.?trail|paper.?slip|voter.?verifiable/i,
+    a: "VVPAT shows a printed paper slip of your chosen candidate for 7 seconds after voting, then drops it into a sealed box. Every EVM in India has one." },
+  { q: /\bepic\b|voter.?id|voter card|elector.*photo|what.*voter.?id/i,
+    a: "EPIC (Elector Photo Identity Card) is your official Voter ID. Get a free digital e-EPIC instantly on the ECI Voter Helpline App — no office visit needed." },
+  { q: /voter.*roll|electoral.*roll|voter.*list|check.*name|am i.*register/i,
+    a: "Check your name on the electoral roll at electoralsearch.eci.gov.in — search by name, EPIC number, or mobile. Takes under 30 seconds." },
+  { q: /eligib|can i vote|who can vote|18.*vote|age.*vote|minimum age/i,
+    a: "To vote in India you must be: 18+ years old, an Indian citizen, and registered at an address in India. Register free at voters.eci.gov.in." },
+  { q: /register|form.?6|how.*register|sign up.*vote|new voter/i,
+    a: "Register at voters.eci.gov.in → 'Register as New Voter' → fill Form 6 → upload age proof, address proof, photo. Confirmation by SMS within 4–6 weeks." },
+  { q: /booth|polling station|where.*vote|find.*booth|my booth/i,
+    a: "Find your polling booth at electoralsearch.eci.gov.in — search by name or EPIC number. Your booth is always within 2 km of your registered address." },
+  { q: /time|hours|open|close|timing|when.*poll|voting.*time|booth.*hour/i,
+    a: "Polling booths are open 7:00 AM – 6:00 PM on election day. Hours vary slightly by state — check your exact booth timing on the ECI Voter Helpline App." },
+  { q: /document|id.*bring|carry.*id|what.*bring|bring.*poll|id.*poll/i,
+    a: "Bring any one: Voter ID (EPIC), Aadhaar, PAN card, Passport, Driving Licence, or MNREGA job card. Your name must be on the electoral roll." },
+  { q: /indelible.?ink|\bink\b|finger.*mark|mark.*finger/i,
+    a: "Indelible silver-nitrate ink is applied to your left index finger to prevent double voting — stays ~2 weeks. Used since 1962, made in Mysore." },
+  { q: /mcc|model.?code|code.?of.?conduct/i,
+    a: "The Model Code of Conduct activates when the election schedule is announced — banning new govt schemes and political misuse of resources until results." },
+  { q: /form.?6/i,
+    a: "Form 6 is the voter registration form. Fill it free at voters.eci.gov.in — needs age proof, address proof, and a photo. Processing: 4–6 weeks." },
+  { q: /helpline|1950|toll.?free|complaint/i,
+    a: "ECI Voter Helpline: 1950 (toll-free, every day). Report violations via the cVIGIL app with geo-tagged photos — anonymously." },
+  { q: /silent.?period|48.?hour|campaign.*ban/i,
+    a: "A 48-hour silent period before polling day bans all campaigns and political ads — giving voters space to decide without any pressure." },
+  { q: /proxy|someone.*vote|vote.*behalf/i,
+    a: "Proxy voting is not allowed in India — only you can cast your vote in person at your assigned booth." },
+];
+
+function getIntent(input) {
+  const text = (input || "").toLowerCase().trim();
+  if (!text) return null;
+  for (const { flow, re } of INTENT_PATTERNS) {
+    if (re.test(text)) return flow;
+  }
+  return null;
+}
+
+// ─── Quiz data ────────────────────────────────────────────────────────────
+const QUIZ_QUESTIONS = [
+  {
+    id: "roll",
+    question: "Have you checked that your name is on the Electoral Roll?",
+    options: [
+      { label: "Yes, I've confirmed", score: 3 },
+      { label: "Not yet, but I plan to", score: 1 },
+      { label: "No / I don't know how", score: 0 },
+    ],
+  },
+  {
+    id: "id",
+    question: "Do you have a Voter ID, Aadhaar, PAN, or Passport ready?",
+    options: [
+      { label: "Yes, Voter ID ready", score: 3 },
+      { label: "Have Aadhaar / PAN / Passport", score: 3 },
+      { label: "No, need to arrange one", score: 0 },
+    ],
+  },
+  {
+    id: "booth",
+    question: "Do you know the location of your assigned polling booth?",
+    options: [
+      { label: "Yes, I know exactly where it is", score: 4 },
+      { label: "I know the area roughly", score: 2 },
+      { label: "No idea — haven't checked yet", score: 0 },
+    ],
+  },
+];
+
+function calcScore(answers) {
+  const total = answers.reduce((s, a) => s + a.score, 0);
+  const scaled = Math.min(10, Math.round((total / 10) * 10));
+
+  const gaps = [];
+  if (answers[0]?.score === 0) gaps.push("Confirm your name on the electoral roll");
+  if (answers[1]?.score === 0) gaps.push("Arrange a Voter ID or alternate document (Aadhaar, PAN, Passport)");
+  if (answers[2]?.score === 0) gaps.push("Find your polling booth before election day");
+
+  if (scaled >= 9) return {
+    score: scaled, label: "Election-Ready!", color: "#138808",
+    msg: "You're fully prepared — nothing left to do but show up and vote.",
+    insight: "You've covered every critical step. Most voters skip booth verification — you didn't.",
+    suggestion: "Share Nagarik AI with a friend who hasn't checked yet.",
+    gaps: [],
+  };
+  if (scaled >= 6) return {
+    score: scaled, label: "Almost There", color: "#e8650a",
+    msg: "You're close. A couple of quick checks and you'll be fully ready.",
+    insight: "Most preparation gaps happen in the final week before election day — you still have time.",
+    suggestion: gaps.length ? gaps[0] : "Double-check your booth address — it can change between elections.",
+    gaps,
+  };
+  if (scaled >= 3) return {
+    score: scaled, label: "Getting Started", color: "#d97706",
+    msg: "Good start. Let's close the gaps before election day.",
+    insight: "Voters who prepare in advance are significantly more likely to actually vote.",
+    suggestion: gaps.length ? `Start with: ${gaps[0]}.` : "Begin with the Voting Guide — it takes under 5 minutes.",
+    gaps,
+  };
+  return {
+    score: scaled, label: "Let's Get You Ready", color: "#dc2626",
+    msg: "No worries — Nagarik AI will walk you through every step.",
+    insight: "Every prepared voter starts exactly here. The next 5 minutes can change that.",
+    suggestion: "Start by checking your name on the voter roll — it's the most common blocker.",
+    gaps,
+  };
+}
+
+// ─── Eligibility questions ────────────────────────────────────────────────
+const ELIG_QUESTIONS = [
+  { id: "age",          label: "How old are you?",                                      type: "number" },
+  { id: "citizen",      label: "Are you a citizen of India?",                           opts: ["Yes", "No"] },
+  { id: "resident",     label: "Are you ordinarily resident at an address in India?",   opts: ["Yes", "No"] },
+  { id: "soundMind",    label: "Have you been declared of unsound mind by any court?",  opts: ["No", "Yes"] },
+  { id: "disqualified", label: "Are you disqualified from voting under any law?",       opts: ["No", "Yes"] },
+];
+
+// ─── Hero taglines ────────────────────────────────────────────────────────
+const TAGLINES = [
+  { h: "Your voice. Your vote. Your India.",     s: "Find your booth, check eligibility, and vote — all in one place." },
+  { h: "Democracy starts with one citizen.",     s: "First time voting? Start here. Takes under 5 minutes." },
+  { h: "India votes. Does it include you?",      s: "Check if you're eligible — 5 yes/no questions, done instantly." },
+  { h: "Understand before you vote.",            s: "Know exactly what happens inside a polling booth before you go." },
+  { h: "640 million Indians voted last time.",   s: "Be one of them. Nagarik AI shows you every step." },
+];
+
+// ─── Sub-components ───────────────────────────────────────────────────────
+
+function ProgressBar({ step, total }) {
+  return (
+    <div className="progress-track">
+      <div className="progress-fill" style={{ width: `${((step) / total) * 100}%` }} />
+      <span className="progress-label">Step {step} of {total}</span>
+    </div>
+  );
+}
+
+function TimelineView({ onDone, onFlow, name }) {
+  return (
+    <div className="flow-container">
+      <div className="flow-hero timeline-hero">
+        <div className="flow-icon">📅</div>
+        <h2>India's Election Journey</h2>
+        <p>7 phases from announcement to results</p>
+      </div>
+      <div className="timeline-list">
+        {TIMELINE.map((t, i) => (
+          <div key={t.phase} className="tl-item" style={{ animationDelay: `${i * 60}ms` }}>
+            <div className="tl-left">
+              <div className="tl-dot" style={{ background: t.border }}>
+                <span>{t.icon}</span>
+              </div>
+              {i < TIMELINE.length - 1 && <div className="tl-connector" />}
+            </div>
+            <div className="tl-right">
+              <div className="tl-badge" style={{ background: t.color, color: t.text, borderColor: t.border }}>
+                Phase {t.phase}
+              </div>
+              <div className="tl-name">{t.name}</div>
+              <div className="tl-desc">{t.desc}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+      {/* Phase 6: Flow completion */}
+      <FlowCompletion onFlow={onFlow} prompt="Explore another topic:" />
+      <button className="btn-primary full-width" onClick={onDone}>
+        ✅ Got it — What's next?
+      </button>
+    </div>
+  );
+}
+
+function VotingGuide({ onDone, onFlow, name }) {
+  const [step, setStep] = useState(0);
+  const s = VOTE_STEPS[step];
+  const isLast = step === VOTE_STEPS.length - 1;
+
+  return (
+    <div className="flow-container">
+      <div className="flow-hero voting-hero">
+        <div className="flow-icon">{s.emoji}</div>
+        <h2>{s.title}</h2>
+      </div>
+      <ProgressBar step={step + 1} total={VOTE_STEPS.length} />
+      <div className="step-content">
+        <ul className="step-list">
+          {s.details.map((d, i) => (
+            <li key={i} className="step-item">
+              <span className="step-bullet">→</span>
+              <span>{d}</span>
+            </li>
+          ))}
+        </ul>
+        {/* Phase 7: Micro wow moment on vote casting step */}
+        {step === 4 && (
+          <div className="wow-moment">
+            <span className="wow-icon">🖊️</span>
+            <p>
+              That ink mark on your finger? It's been applied to over
+              640 million Indians this election alone. Today it's your turn.
+            </p>
+          </div>
+        )}
+        {s.tip && (
+          <div className="tip-box">
+            <span className="tip-icon">💡</span>
+            <span>{s.tip}</span>
+          </div>
+        )}
+      </div>
+      <div className="step-nav">
+        {step > 0 && (
+          <button
+            className="btn-secondary"
+            onClick={() => setStep(p => Math.max(0, p - 1))}
+          >
+            ← Back
+          </button>
+        )}
+        {isLast ? (
+          <div className="last-step-actions">
+            <a
+              href="https://electoralsearch.eci.gov.in"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="cta-link-btn"
+            >
+              Find my polling booth →
+            </a>
+            <button className="btn-primary celebrate" onClick={onDone}>
+              🎉 I'm Ready to Vote!
+            </button>
+          </div>
+        ) : (
+          <button className="btn-primary" onClick={() => setStep(p => p + 1)}>
+            Next →
+          </button>
+        )}
+      </div>
+      {isLast && <FlowCompletion onFlow={onFlow} prompt="Explore another topic:" />}
+    </div>
+  );
+}
+
+function EligibilityChecker({ onDone, onFlow, name }) {
+  const [step, setStep] = useState(0);
+  const [answers, setAnswers] = useState({});
+  const [numVal, setNumVal] = useState("");
+  const [result, setResult] = useState(null);
+  const inputRef = useRef(null);
+
+  useEffect(() => { inputRef.current?.focus(); }, [step]);
+
+  const q = ELIG_QUESTIONS[step];
+
+  function advance(val) {
+    const a = { ...answers, [q.id]: val };
+    setAnswers(a);
+    if (step < ELIG_QUESTIONS.length - 1) {
+      setStep(s => s + 1);
+      setNumVal("");
+    } else {
+      setResult(checkEligibility(a));
+    }
+  }
+
+  if (result) {
+    const { eligible, reasons, nextSteps } = result;
+    return (
+      <div className="flow-container">
+        <div className={`result-banner ${eligible ? "result-pass" : "result-fail"}`}>
+          <div className="result-icon">{eligible ? "✅" : "❌"}</div>
+          <h2>{eligible ? `Great news, ${name}!` : `Not quite, ${name}`}</h2>
+          <p>{eligible ? "You're one of ~950 million eligible voters in India." : "Here's why you may not be eligible:"}</p>
+        </div>
+        <div className="result-items">
+          {(eligible ? nextSteps : reasons).map((item, i) => (
+            <div key={i} className={`result-item ${eligible ? "item-pass" : "item-fail"}`}>
+              <span>{eligible ? "✓" : "•"}</span>
+              <span>{item}</span>
+            </div>
+          ))}
+        </div>
+        {!eligible && (
+          <div className="contact-box">
+            <strong>Need help?</strong> Call ECI Voter Helpline: <strong>1950</strong> (toll-free) · eci.gov.in
+          </div>
+        )}
+        {/* Phase 2: Real-world action link */}
+        {eligible && (
+          <a
+            href="https://voters.eci.gov.in"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="cta-link-btn"
+          >
+            Register on voters.eci.gov.in →
+          </a>
+        )}
+        {/* Phase 6: Flow completion */}
+        <FlowCompletion onFlow={onFlow} prompt="What would you like to do next?" />
+        <button className="btn-primary full-width" onClick={onDone}>
+          {eligible ? "🗳️ Show me how to vote" : "📚 Learn more"}
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flow-container">
+      <div className="flow-hero elig-hero">
+        <div className="flow-icon">✅</div>
+        <h2>Eligibility Check</h2>
+        <p>5 yes/no questions — takes about 1 minute</p>
+      </div>
+      <ProgressBar step={step + 1} total={ELIG_QUESTIONS.length} />
+      <div className="elig-question">
+        <p className="q-label">{q.label}</p>
+        {q.opts ? (
+          <div className="elig-opts">
+            {q.opts.map(o => (
+              <button key={o} className="elig-btn" onClick={() => advance(o)}>{o}</button>
+            ))}
+          </div>
+        ) : (
+          <div className="elig-num-row">
+            <input
+              ref={inputRef}
+              type="number"
+              min={0}
+              max={120}
+              value={numVal}
+              placeholder="Enter your age"
+              className="age-input"
+              onChange={e => setNumVal(e.target.value)}
+              onKeyDown={e => e.key === "Enter" && numVal && advance(numVal)}
+            />
+            <button
+              className="btn-primary"
+              disabled={!numVal}
+              onClick={() => numVal && advance(numVal)}
+            >
+              Confirm →
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Flow Completion — reusable "What's next?" block ─────────────────────
+function FlowCompletion({ onFlow, prompt }) {
+  return (
+    <div className="completion-box">
+      <p className="completion-prompt">{prompt || "What would you like to do next?"}</p>
+      <div className="completion-actions">
+        <button className="completion-btn" onClick={() => onFlow("eligibility")}>✅ Check Eligibility</button>
+        <button className="completion-btn" onClick={() => onFlow("timeline")}>📅 View Timeline</button>
+        <button className="completion-btn" onClick={() => onFlow("quiz")}>🧠 Take Quiz</button>
+      </div>
+    </div>
+  );
+}
+
+// ─── Readiness Quiz ────────────────────────────────────────────────────────────
+function ReadinessQuiz({ onDone, onFlow, name }) {
+  const [step, setStep] = useState(0);
+  const [answers, setAnswers] = useState([]);
+  const [result, setResult] = useState(null);
+  const [copied, setCopied] = useState(false); // Upgrade 3: share toast
+
+  function pickOption(opt) {
+    const a = [...answers, opt];
+    if (step < QUIZ_QUESTIONS.length - 1) {
+      setAnswers(a);
+      setStep(s => s + 1);
+    } else {
+      setResult(calcScore(a));
+    }
+  }
+
+  async function handleShare(score) {
+    const shareData = {
+      title: `Nagarik AI — I scored ${score}/10!`,
+      text: `I scored ${score}/10 on my Election Readiness Check. Are YOU ready to vote? Check on Nagarik AI.`,
+      url: window.location.href,
+    };
+    if (navigator.share) {
+      try { await navigator.share(shareData); } catch { /* cancelled */ }
+    } else {
+      await navigator.clipboard.writeText(`${shareData.text} ${shareData.url}`);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  }
+
+  if (result) {
+    const pct = result.score * 10;
+    const LABELS = ["Electoral roll confirmed", "Valid ID document ready", "Polling booth located"];
+    return (
+      <div className="flow-container">
+        <div className="score-banner">
+          <div className="score-ring" style={{ "--score-color": result.color }}>
+            <svg viewBox="0 0 100 100" className="score-svg">
+              <circle cx="50" cy="50" r="42" fill="none" stroke="#e5e7eb" strokeWidth="8" />
+              <circle
+                cx="50" cy="50" r="42" fill="none"
+                stroke={result.color} strokeWidth="8"
+                strokeDasharray={`${2.64 * pct} 264`}
+                strokeLinecap="round"
+                transform="rotate(-90 50 50)"
+                style={{ transition: "stroke-dasharray 1s ease" }}
+              />
+            </svg>
+            <div className="score-inner">
+              <span className="score-num">{result.score}</span>
+              <span className="score-denom">/10</span>
+            </div>
+          </div>
+          <h2>{result.label}</h2>
+          <p>{name}, {result.msg}</p>
+        </div>
+
+        {/* Phase 4: Smart insights */}
+        <div className="score-insight-box">
+          <div className="insight-row">
+            <span className="insight-icon">💡</span>
+            <div>
+              <p className="insight-label">What this means</p>
+              <p className="insight-text">{result.insight}</p>
+            </div>
+          </div>
+          <div className="insight-row insight-suggest">
+            <span className="insight-icon">→</span>
+            <div>
+              <p className="insight-label">What to do next</p>
+              <p className="insight-text">{result.suggestion}</p>
+            </div>
+          </div>
+        </div>
+
+        <div className="score-breakdown">
+          {answers.map((a, i) => (
+            <div key={i} className="breakdown-item">
+              <span className="breakdown-q">{LABELS[i]}</span>
+              <span className="breakdown-dots" style={{ color: a.score > 0 ? "#138808" : "#dc2626" }}>
+                {a.score > 0 ? "✓" : "✗"}
+              </span>
+            </div>
+          ))}
+        </div>
+        
+        <div className="share-box">
+          <button className="btn-secondary" onClick={() => handleShare(result.score)}>
+            {copied ? "✅ Copied!" : "📤 Share My Score"}
+          </button>
+        </div>
+
+        {/* Phase 6: Flow completion */}
+        <FlowCompletion onFlow={onFlow} prompt="Explore another topic:" />
+        <button className="btn-primary full-width" onClick={onDone}>
+          🗳️ Guide me through voting
+        </button>
+      </div>
+    );
+  }
+
+  const q = QUIZ_QUESTIONS[step];
+  return (
+    <div className="flow-container">
+      <div className="flow-hero quiz-hero">
+        <div className="flow-icon">🧠</div>
+        <h2>Readiness Check</h2>
+        <p>3 questions · get your score in 30 seconds</p>
+      </div>
+      <ProgressBar step={step + 1} total={QUIZ_QUESTIONS.length} />
+      <div className="quiz-question">
+        <p className="q-label">{q.question}</p>
+        <div className="quiz-opts">
+          {q.options.map((o, i) => (
+            <button key={i} className="quiz-btn" onClick={() => pickOption(o)}>
+              {o.label}
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Chat-style message row ───────────────────────────────────────────────
+function ChatMessage({ msg, onAction }) {
+  const isUser = msg.role === "user";
+  const [showWhy, setShowWhy] = useState(false);
+  return (
+    <div className={`chat-row ${isUser ? "chat-user" : "chat-bot"}`}>
+      {!isUser && <div className="chat-avatar">🪬</div>}
+      <div>
+        <div className={`chat-bubble ${isUser ? "bubble-user" : "bubble-bot"}`}>
+          {msg.isQuickAnswer && (
+            <span className="quick-badge">⚡ Quick Answer</span>
+          )}
+          {msg.isTyping ? (
+            <span className="typing-dots">
+              <span className="typing-dot" />
+              <span className="typing-dot" />
+              <span className="typing-dot" />
+            </span>
+          ) : msg.content}
+        </div>
+        {/* — Why this? explainability toggle — */}
+        {!isUser && !msg.isTyping && (
+          <div className="why-wrap">
+            <button className="why-btn" onClick={() => setShowWhy(w => !w)}>
+              💡 {showWhy ? "Hide" : "Why this?"}
+            </button>
+            {showWhy && (
+              <div className="why-box">
+                <p>Based on <strong>Election Commission of India (ECI)</strong> official guidelines and verified voter education materials.</p>
+                {msg.isQuickAnswer && <p>✅ This is a <strong>verified quick fact</strong> from ECI public data.</p>}
+                {!msg.isQuickAnswer && <p>🧠 Answer generated by Claude AI using the Nagarik AI civic knowledge system prompt.</p>}
+              </div>
+            )}
+          </div>
+        )}
+        {!msg.isTyping && msg.actions && (
+          <div className="chat-actions">
+            {msg.actions.map(a => (
+              <button key={a} className="action-chip" onClick={() => onAction(a)}>{a}</button>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Landing Screen ───────────────────────────────────────────────────────
+function LandingScreen({ onEnter }) {
+  const [name, setName] = useState("");
+  const [tagIdx, setTagIdx] = useState(0);
+  const inputRef = useRef(null);
+
+  useEffect(() => {
+    const t = setInterval(() => setTagIdx(i => (i + 1) % TAGLINES.length), 4000);
+    return () => clearInterval(t);
+  }, []);
+
+  useEffect(() => { inputRef.current?.focus(); }, []);
+
+  const tag = TAGLINES[tagIdx];
+
+  return (
+    <div className="landing">
+      <div className="tricolor-bar">
+        <div className="tc saffron" />
+        <div className="tc white" />
+        <div className="tc green" />
+      </div>
+
+      <div className="landing-body">
+        <div className="brand-row">
+          <span className="brand-icon">🪬</span>
+          <span className="brand-name">Nagarik AI</span>
+          <span className="brand-flag"><IndiaFlag size={20} /></span>
+        </div>
+
+        {/* Phase 1: Differentiator positioning line */}
+        <div className="tagline-box" key={tagIdx}>
+          <h1 className="tagline-h">{tag.h}</h1>
+          <p className="tagline-s">{tag.s}</p>
+        </div>
+
+        {/* Phase 1: Speed + audience hooks */}
+        <div className="hero-hooks">
+          <span className="hook-pill">⏱ Under 60 seconds to understand how to vote</span>
+          <span className="hook-pill">👋 New to voting? You're exactly who this is for.</span>
+        </div>
+
+        <p className="differentiator">
+          No confusing articles. No government jargon. Just clear answers — step by step.
+        </p>
+
+        {/* Phase 2: Human trust signals */}
+        <div className="trust-pills">
+          <span className="trust-pill">⚡ Works Offline</span>
+          <span className="trust-pill">✅ Aligned with ECI guidelines</span>
+          <span className="trust-pill">🔒 No data collected</span>
+        </div>
+        <p className="trust-line">
+          Built using verified public election data. Free forever. Not affiliated with ECI.
+        </p>
+
+        <div className="name-block">
+          <label className="name-label">Let's start — what's your name?</label>
+          <div className="name-row">
+            <input
+              ref={inputRef}
+              className="name-input"
+              type="text"
+              placeholder="e.g. Priya"
+              value={name}
+              maxLength={24}
+              onChange={e => setName(e.target.value)}
+              onKeyDown={e => e.key === "Enter" && name.trim() && onEnter(name.trim())}
+            />
+            <button
+              className="btn-primary"
+              disabled={!name.trim()}
+              onClick={() => onEnter(name.trim())}
+            >
+              Begin →
+            </button>
+          </div>
+          <p className="name-hint">No account needed. Your data stays on your device.</p>
+        </div>
+      </div>
+
+      <div className="landing-footer">
+        Free civic resource · Verified election information · Not affiliated with ECI
+      </div>
+    </div>
+  );
+}
+
+// ─── Fact Card (Upgrade 5) ────────────────────────────────────────────────────
+function FactCard() {
+  const [idx, setIdx] = useState(0);
+  const [visible, setVisible] = useState(true);
+  useEffect(() => {
+    const t = setInterval(() => {
+      setVisible(false);
+      setTimeout(() => { setIdx(i => (i + 1) % FACTS.length); setVisible(true); }, 400);
+    }, 8000);
+    return () => clearInterval(t);
+  }, []);
+  return (
+    <div className="fact-card" style={{ opacity: visible ? 1 : 0, transition: "opacity 0.4s ease" }}>
+      <span className="fact-text">{FACTS[idx]}</span>
+    </div>
+  );
+}
+
+// ─── Home Screen ──────────────────────────────────────────────────────────────
+const FEATURES = [
+  { flow: "voting",      icon: "🗳️", labelKey: "guideVote",  descKey: "guideDesc" },
+  { flow: "timeline",   icon: "📅", labelKey: "journey",    descKey: "journeyDesc" },
+  { flow: "eligibility",icon: "✅", labelKey: "eligible",   descKey: "eligDesc" },
+  { flow: "quiz",       icon: "🧠", labelKey: "readiness",  descKey: "readinessDesc" },
+];
+
+// ─── Civic Impact Meter (upgrade 6) ──────────────────────────────────────────────
+const FLOW_WEIGHTS = { eligibility: 30, voting: 30, quiz: 40 };
+
+function CivicImpactMeter({ completed }) {
+  const pct = completed.reduce((s, f) => s + (FLOW_WEIGHTS[f] || 0), 0);
+  const color = pct >= 70 ? "#138808" : pct >= 40 ? "#e8650a" : "#94a3b8";
+  const label = pct >= 70 ? "Election-Ready 🎉" : pct >= 40 ? "Getting There 💪" : "Just Starting 👋";
+  return (
+    <div className="impact-meter">
+      <div className="impact-header">
+        <span className="impact-label">🟢 Civic Readiness — <em>{label}</em></span>
+        <span className="impact-pct" style={{ color }}>{pct}%</span>
+      </div>
+      <div className="impact-track">
+        <div className="impact-fill" style={{ width: `${pct}%`, background: color }} />
+      </div>
+      {pct === 0 && <p className="impact-hint">Complete the flows below to build your civic score</p>}
+    </div>
+  );
+}
+
+function HomeScreen({ name, onFlow, msgs, onSend, input, setInput, isHindi, completedFlows }) {
+  const inputRef = useRef(null);
+  const endRef = useRef(null);
+  const s = STR[isHindi ? "hi" : "en"];
+
+  useEffect(() => {
+    if (msgs.length > 1) {
+      endRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [msgs]);
+
+  return (
+    <div className="home screen-enter">
+      <div className="home-header">
+        <div className="home-greeting">
+          <span>{s.namaste}, <strong>{name}</strong>! 🙏</span>
+          <p>{s.clearer}</p>
+        </div>
+        <span className="hdr-flag-home"><IndiaFlag size={24} /></span>
+      </div>
+
+      <CivicImpactMeter completed={completedFlows} />
+
+      <FactCard />
+
+      <div className="feature-grid">
+        {FEATURES.map(f => (
+          <button key={f.flow} className="feature-card" onClick={() => onFlow(f.flow)}>
+            <span className="fc-icon">{f.icon}</span>
+            <span className="fc-label">{s[f.labelKey]}</span>
+            <span className="fc-desc">{s[f.descKey]}</span>
+          </button>
+        ))}
+      </div>
+
+      {msgs.length > 0 && (
+        <div className="chat-area">
+          {msgs.map(m => (
+            <ChatMessage key={m.id} msg={m} onAction={txt => onSend(txt)} />
+          ))}
+          <div ref={endRef} />
+        </div>
+      )}
+
+      <div className="chat-input-area">
+        <div className="chat-input-row">
+          <input
+            ref={inputRef}
+            className="chat-input"
+            value={input}
+            placeholder={s.placeholder}
+            onChange={e => setInput(e.target.value)}
+            onKeyDown={e => e.key === "Enter" && onSend(input)}
+          />
+          <button
+            className="send-btn"
+            disabled={!input.trim()}
+            onClick={() => onSend(input)}
+            aria-label="Send"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <polygon points="22 2 15 22 11 13 2 9 22 2" />
+            </svg>
+          </button>
+        </div>
+        <p className="input-hint">{s.hint}</p>
+      </div>
+      {/* Security footer */}
+      <div className="security-footer">
+        🔒 Your data is not stored. This app runs securely.
+      </div>
+    </div>
+  );
+}
+
+// ─── Root App ─────────────────────────────────────────────────────────────────
+export default function App() {
+  const [phase, setPhase] = useState("landing");
+  const [userName, setUserName] = useState("");
+  const [currentFlow, setCurrentFlow] = useState(null);
+  const [msgs, setMsgs] = useState([]);
+  const [input, setInput] = useState("");
+  const [isHindi, setIsHindi] = useState(false);
+  const [isTyping, setIsTyping] = useState(false);
+  const [completedFlows, setCompletedFlows] = useState([]); // tracks which flows done
+  const [lastCompleted, setLastCompleted] = useState(null);  // for context-aware AI
+
+  function handleEnter(name) {
+    const formatted = name.charAt(0).toUpperCase() + name.slice(1).toLowerCase();
+    setUserName(formatted);
+    setMsgs([{
+      id: crypto.randomUUID(),
+      role: "assistant",
+      content: `Hi ${name}! 👋 Pick a topic below or just ask me anything about voting in India.`,
+      actions: ["How do I vote?", "Am I eligible?", "What is EPIC?"],
+    }]);
+    setPhase("home");
+  }
+
+  function handleFlow(flow) {
+    setCurrentFlow(flow);
+    setPhase("flow");
+  }
+
+  function handleFlowDone() {
+    const followUps = {
+      voting:      { content: `You've completed the voting guide, ${userName}! 🎉 Your voice matters — go make it count.`, actions: ["Check my eligibility", "Show election timeline"] },
+      timeline:    { content: `You now know India's full election timeline! Want to check your eligibility next?`, actions: ["Am I eligible?", "Guide me to vote"] },
+      eligibility: { content: `Eligibility check done! Shall I walk you through the voting process step by step?`, actions: ["Guide me to vote", "Show election timeline"] },
+      quiz:        { content: `Quiz complete! Let me walk you through the voting process to close any gaps.`, actions: ["Guide me to vote", "Check my eligibility"] },
+    };
+    const fu = followUps[currentFlow] || { content: `Done! What else would you like to explore?`, actions: [] };
+    setMsgs(p => [...p, { id: crypto.randomUUID(), role: "assistant", ...fu }]);
+    // Track completed flow for context-aware AI + Civic Impact Meter
+    if (currentFlow) {
+      setCompletedFlows(prev => prev.includes(currentFlow) ? prev : [...prev, currentFlow]);
+      setLastCompleted(currentFlow);
+    }
+    setCurrentFlow(null);
+    setPhase("home");
+  }
+
+  async function handleSend(text) {
+    if (!text.trim() || isTyping) return;
+    setInput("");
+    const userMsg = { id: crypto.randomUUID(), role: "user", content: text };
+
+    // Quick Answer Mode — check BEFORE intent routing
+    for (const { q, a } of QUICK_ANSWERS) {
+      if (q.test(text)) {
+        setMsgs(p => [...p, userMsg, {
+          id: crypto.randomUUID(),
+          role: "assistant",
+          content: a,
+          actions: ["Guide me to vote", "Check my eligibility"],
+          isQuickAnswer: true,
+        }]);
+        return;
+      }
+    }
+
+    const intent = getIntent(text);
+    if (intent) {
+      setMsgs(p => [...p, userMsg, {
+        id: crypto.randomUUID(),
+        role: "assistant",
+        content: `Sure, ${userName}! Let me open that guide for you.`,
+      }]);
+      setTimeout(() => handleFlow(intent), 600);
+      return;
+    }
+
+    // Context-aware AI call — pass full user context to backend
+    const userContext = {
+      name: userName,
+      language: isHindi ? "Hindi" : "English",
+      lastIntent: currentFlow,
+      lastFlowCompleted: lastCompleted,
+      completedFlows,
+    };
+
+    const typingId = crypto.randomUUID();
+    setMsgs(p => [...p, userMsg, { id: typingId, role: "assistant", isTyping: true }]);
+    setIsTyping(true);
+
+    try {
+      const base = import.meta.env.VITE_API_URL || "http://localhost:3001";
+      const res = await fetch(`${base}/api/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/  // ── Home phase — full-width layout
+  return (
+    <div className="fw-app screen-enter">
+      <GlobalNav />
+      <main className="fw-main">
+        {/* Greeting hero */}
+        <section className="fw-hero">
+          <div className="fw-inner">
+            <div className="fw-greeting">
+              <h1 className="fw-greeting-name">
+                {STR[isHindi ? "hi" : "en"].namaste}, <span>{userName}</span>! 🙏
+              </h1>
+              <p className="fw-greeting-sub">{STR[isHindi ? "hi" : "en"].clearer}</p>
+            </div>
+            <CivicImpactMeter completed={completedFlows} />
+          </div>
+        </section>
+
+        {/* Content area */}
+        <section className="fw-content">
+          <div className="fw-inner">
+            <FactCard />
+
+            {/* Feature grid */}
+            <div className="fw-grid">
+              {FEATURES.map(f => (
+                <button key={f.flow} className="fw-feature-card" onClick={() => handleFlow(f.flow)}>
+                  <span className="fw-fc-icon">{f.icon}</span>
+                  <span className="fw-fc-label">{STR[isHindi ? "hi" : "en"][f.labelKey]}</span>
+                  <span className="fw-fc-desc">{STR[isHindi ? "hi" : "en"][f.descKey]}</span>
+                </button>
+              ))}
+            </div>
+
+            {/* Chat history */}
+            {msgs.length > 0 && (
+              <div className="fw-chat-area" id="fw-chat">
+                {msgs.map(m => (
+                  <ChatMessage key={m.id} msg={m} onAction={txt => handleSend(txt)} />
+                ))}
+                <div id="fw-chat-end" />
+              </div>
+            )}
+
+            {/* Ask anything bar */}
+            <div className="fw-ask-bar">
+              <div className="fw-ask-row">
+                <input
+                  className="fw-ask-input"
+                  value={input}
+                  placeholder={STR[isHindi ? "hi" : "en"].placeholder}
+                  onChange={e => setInput(e.target.value)}
+                  onKeyDown={e => e.key === "Enter" && handleSend(input)}
+                />
+                <button
+                  className="fw-ask-send"
+                  disabled={!input.trim()}
+                  onClick={() => handleSend(input)}
+                  aria-label="Send"
+                >
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <polygon points="22 2 15 22 11 13 2 9 22 2" />
+                  </svg>
+                </button>
+              </div>
+              <p className="fw-ask-hint">{STR[isHindi ? "hi" : "en"].hint}</p>
+              <p className="fw-security">🔒 Your data is not stored. This app runs securely.</p>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+  );
+}�"}
+    </button>
+  );
+
+  // ── Render ────────────────────────────────────────────────────────────────
+  if (phase === "landing") {
+    return (
+      <div className="layout-centered">
+        <LandingScreen key="landing" onEnter={handleEnter} />
+      </div>
+    );
+  }
+
+  if (phase === "flow") {
+    return (
+      <div className="layout-full">
+        <div className="shell screen-enter" key="flow">
+          <header className="app-header">
+            <button className="back-btn" onClick={handleFlowDone} aria-label="Back">
+              ← Back
+            </button>
+            <span className="header-brand">🪬 Nagarik AI</span>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <LangToggle />
+              <span className="hdr-flag"><IndiaFlag size={22} /></span>
+            </div>
+          </header>
+          <main className="flow-main">
+            {currentFlow === "voting"      && <VotingGuide onDone={handleFlowDone} onFlow={handleFlow} name={userName} />}
+            {currentFlow === "timeline"    && <TimelineView onDone={handleFlowDone} onFlow={handleFlow} name={userName} />}
+            {currentFlow === "eligibility" && <EligibilityChecker onDone={handleFlowDone} onFlow={handleFlow} name={userName} />}
+            {currentFlow === "quiz"        && <ReadinessQuiz onDone={handleFlowDone} onFlow={handleFlow} name={userName} />}
+          </main>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="layout-full">
+      <div className="shell screen-enter" key="home">
+        <header className="app-header">
+          <div className="header-left">
+            <div className="header-avatar">🪬</div>
+            <div>
+              <div className="header-name">Nagarik AI</div>
+              <div className="header-sub"><span className="dot-live" />नागरिक AI · Live</div>
+            </div>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <LangToggle />
+            <span className="hdr-flag"><IndiaFlag size={22} /></span>
+          </div>
+        </header>
+        <main className="flow-main" style={{ padding: 0 }}>
+          <HomeScreen
+            name={userName}
+            onFlow={handleFlow}
+            msgs={msgs}
+            onSend={handleSend}
+            input={input}
+            setInput={setInput}
+            isHindi={isHindi}
+            completedFlows={completedFlows}
+          />
+        </main>
+      </div>
+    </div>
+  );
+}
