@@ -4,6 +4,10 @@ Nagarik AI is an AI-powered election awareness and citizen assistance web platfo
 
 The platform focuses on improving civic engagement by making election-related information simple, accessible, and interactive for citizens.
 
+This project was developed as part of **PromptWars: Virtual**, a hackathon organized by [Hack2Skill](https://hack2skill.com/?utm_source=chatgpt.com) in collaboration with [Google](https://www.google.com/?utm_source=chatgpt.com).
+
+PromptWars: Virtual focuses on intent-driven development, encouraging participants to build functional, real-world applications using AI-powered prompting and modern development workflows. The hackathon emphasizes solving industry-level challenges faster and more efficiently using next-generation AI tools and prompt engineering concepts.
+
 ---
 
 ## Features
